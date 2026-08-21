@@ -6,6 +6,8 @@
     <title>2015 FCE 1 Test 1 U+R Split Screen</title>
     <!-- Load Mozilla's PDF.js library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <!-- Load YouTube IFrame Player API (used for forced background audio) -->
+    <script src="https://www.youtube.com/iframe_api"></script>
     <style>
         * {
             box-sizing: border-box;
@@ -242,6 +244,18 @@
         .gate-btn-free { background: #4f545c; color: white; }
         .gate-btn-free:hover { background: #686d73; transform: translateY(-1px); }
 
+        /* Hidden YouTube audio player: not visible, not clickable, no controls exposed */
+        #hidden-yt-audio-container {
+            position: fixed;
+            top: -9999px;
+            left: -9999px;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            opacity: 0;
+            pointer-events: none;
+        }
+
         @media (max-width: 600px) and (orientation: portrait) {
             .container { flex-direction: column; }
             .left-side { width: 100% !important; height: 45%; }
@@ -258,7 +272,7 @@
         
         <!-- LEFT PANEL: Google Form -->
         <div class="split left-side" id="left-panel">
-            <iframe src="https://docs.google.com/forms/d/e/1FAIpQLSc_ucH7zf5AQ3J4bfP2thNjO06bPlhBciNCedu7uVK3QO1s3A/viewform?embedded=true">Loading…</iframe>
+           <iframe src="https://docs.google.com/forms/d/e/1FAIpQLSfwVfylTOSiqYVvmxUl6aMRs3tocMwaQ9Bz0XcnxZMr-Qlwyg/viewform?embedded=true" width="640" height="8240" frameborder="0" marginheight="0" marginwidth="0">Loading…</iframe>
         </div>
 
         <!-- MIDDLE RESIZER -->
@@ -322,15 +336,114 @@
         </div>
     </div>
 
+    <!-- Hidden background audio player: no visible controls, cannot be paused/muted by the student -->
+    <div id="hidden-yt-audio-container">
+        <div id="hidden-yt-audio-player"></div>
+    </div>
+
     <script>
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
 
-        const pdfUrl = '2015FCE1-1UR.pdf';
+        const pdfUrl = '2020KETPLUS-T2L.pdf';
 
         // --- GLOBAL TIME CONFIGURATION CONSTANT ---
         // Edit this value (in seconds) to adjust test length. 
         // e.g., 60 for 1 minute, 600 for 10 minutes, 1800 for 30 minutes.
-        const TEST_DURATION_SECONDS = 30; 
+        const TEST_DURATION_SECONDS = 1800; 
+
+        // --- YOUTUBE FORCED AUDIO CONFIGURATION ---
+        // Paste a full YouTube URL (or just the video ID) here.
+        // Leave it as an empty string '' to disable this feature entirely —
+        // everything else in the page will keep working normally either way.
+        // Examples of accepted formats:
+        //   'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+        //   'https://youtu.be/dQw4w9WgXcQ'
+        //   'dQw4w9WgXcQ'
+        const YOUTUBE_URL = 'https://www.youtube.com/watch?v=eGXb0CwNoOk';
+
+        function extractYouTubeId(input) {
+            if (!input) return '';
+            const trimmed = input.trim();
+            // Already a bare 11-char video ID
+            if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) return trimmed;
+            const patterns = [
+                /(?:youtube\.com\/watch\?v=|youtube\.com\/embed\/|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/
+            ];
+            for (const re of patterns) {
+                const m = trimmed.match(re);
+                if (m) return m[1];
+            }
+            return '';
+        }
+
+        const YOUTUBE_VIDEO_ID = extractYouTubeId(YOUTUBE_URL);
+
+        let hiddenYTPlayer = null;
+        let ytApiReady = false;
+        let ytPlayRequested = false; // becomes true once the student clicks a gate button
+
+        // Called automatically by the YouTube IFrame API script once it has loaded
+        function onYouTubeIframeAPIReady() {
+            ytApiReady = true;
+            if (!YOUTUBE_VIDEO_ID) return; // Feature disabled, nothing to set up
+
+            hiddenYTPlayer = new YT.Player('hidden-yt-audio-player', {
+                height: '1',
+                width: '1',
+                videoId: YOUTUBE_VIDEO_ID,
+                playerVars: {
+                    autoplay: 0,
+                    controls: 0,      // no visible controls
+                    disablekb: 1,     // ignore keyboard shortcuts (space/k to pause, m to mute, etc.)
+                    fs: 0,            // no fullscreen button
+                    modestbranding: 1,
+                    rel: 0,
+                    iv_load_policy: 3,
+                    playsinline: 1
+                },
+                events: {
+                    onReady: () => {
+                        if (ytPlayRequested) startForcedAudio();
+                    },
+                    onStateChange: (event) => {
+                        // If anything causes the video to pause or stop, resume it immediately
+                        // so the student has no practical way to pause or silence it.
+                        if (ytPlayRequested && (event.data === YT.PlayerState.PAUSED || event.data === YT.PlayerState.ENDED)) {
+                            try {
+                                hiddenYTPlayer.seekTo(0, true);
+                                hiddenYTPlayer.playVideo();
+                            } catch (e) { /* no-op */ }
+                        }
+                    }
+                }
+            });
+        }
+
+        function startForcedAudio() {
+            if (!YOUTUBE_VIDEO_ID) return; // Feature disabled
+            ytPlayRequested = true;
+            if (hiddenYTPlayer && typeof hiddenYTPlayer.playVideo === 'function') {
+                try {
+                    hiddenYTPlayer.unMute();
+                    hiddenYTPlayer.setVolume(100);
+                    hiddenYTPlayer.playVideo();
+                } catch (e) { /* Player might not be fully ready yet; onReady will retry */ }
+            }
+            // Belt-and-suspenders: keep nudging playback for a few seconds in case
+            // the player wasn't ready in time or a state change briefly paused it.
+            let attempts = 0;
+            const guard = setInterval(() => {
+                attempts++;
+                if (hiddenYTPlayer && typeof hiddenYTPlayer.getPlayerState === 'function') {
+                    const state = hiddenYTPlayer.getPlayerState();
+                    if (state !== YT.PlayerState.PLAYING) {
+                        try { hiddenYTPlayer.playVideo(); } catch (e) { /* no-op */ }
+                    }
+                }
+                if (attempts > 10) clearInterval(guard);
+            }, 500);
+        }
+        // --- END YOUTUBE FORCED AUDIO ---
 
         const transformLayer = document.getElementById('pdf-transform-layer');
         const leftPanel = document.getElementById('left-panel');
@@ -392,11 +505,13 @@
         // --- TIMER INFRASTRUCTURE CONTROLLER ---
         btnSkipTimer.addEventListener('click', () => {
             timerGate.style.display = 'none'; // Safely lift blocker layout
+            startForcedAudio(); // Begin (or resume) the hidden background audio
         });
 
         btnStartTimer.addEventListener('click', () => {
             timerGate.style.display = 'none';
             startExamCountdown(TEST_DURATION_SECONDS);
+            startForcedAudio(); // Begin (or resume) the hidden background audio
         });
 
         function startExamCountdown(durationSeconds) {
