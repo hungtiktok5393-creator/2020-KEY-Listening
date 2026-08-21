@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>2015 FCE 1 Test 4 U+R Split Screen</title>
+    <title>2020 ket plus test 1</title>
     <!-- Load Mozilla's PDF.js library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
     <!-- Load YouTube IFrame API (dùng để phát âm thanh nền, ẩn hoàn toàn khỏi người dùng) -->
@@ -494,6 +494,9 @@
                 <!-- Live Display Ticker -->
                 <div id="timer-ticker" class="timer-display">00:30</div>
 
+                <!-- Nút khắc phục sự cố audio - chỉ hiện khi có cấu hình link YouTube -->
+                <button id="btn-audio-restart" class="tool-btn" style="display: none; background: #ffc107; border-color: #d39e00;">🔊 Bật Âm Thanh</button>
+
                 <button id="btn-help" class="tool-btn">❓ Help</button>
                 <button id="btn-fullscreen" class="tool-btn fullscreen-btn">📺 Fullscreen</button>
             </div>
@@ -537,10 +540,20 @@
         const YOUTUBE_VIDEO_ID = extractYouTubeId(YOUTUBE_URL);
         let ytPlayer = null;
         let ytShouldBePlaying = false; // Cờ khóa: một khi = true thì audio phải luôn ở trạng thái phát
+        let ytWatchdogInterval = null;
+        let ytWatchdogFailCount = 0;
+        let ytFallbackMuteTried = false; // đã thử "phát câm rồi tự bật tiếng" hay chưa
+        let ytIsRebuilding = false; // đang trong quá trình dựng lại player, tránh chồng lệnh
+        let ytApiScriptLoaded = false; // script YouTube IFrame API đã tải xong lần đầu chưa
 
         // Hàm này được YouTube IFrame API gọi tự động khi API tải xong (global callback bắt buộc)
         function onYouTubeIframeAPIReady() {
+            ytApiScriptLoaded = true;
             if (!YOUTUBE_VIDEO_ID) return; // Không có link -> không tạo player, không ảnh hưởng gì
+            createYtPlayer();
+        }
+
+        function createYtPlayer() {
             ytPlayer = new YT.Player('yt-audio-player', {
                 height: '1',
                 width: '1',
@@ -558,17 +571,24 @@
                 },
                 events: {
                     onReady: onYtPlayerReady,
-                    onStateChange: onYtPlayerStateChange
+                    onStateChange: onYtPlayerStateChange,
+                    onError: onYtPlayerError
                 }
             });
         }
 
         function onYtPlayerReady(event) {
+            ytIsRebuilding = false;
             event.target.unMute();
             event.target.setVolume(100);
             if (ytShouldBePlaying) {
-                event.target.playVideo();
+                attemptYtPlay();
             }
+        }
+
+        function onYtPlayerError() {
+            // Lỗi trực tiếp từ player (mạng, video bị chặn tạm thời...) -> dựng lại cho chắc
+            if (ytShouldBePlaying) rebuildYtPlayer();
         }
 
         function onYtPlayerStateChange(event) {
@@ -582,18 +602,145 @@
                 event.target.seekTo(0);
                 event.target.playVideo();
             }
+            // Video đang phát thật sự -> reset bộ đếm lỗi và đảm bảo tiếng đang bật
+            if (event.data === YT.PlayerState.PLAYING) {
+                ytWatchdogFailCount = 0;
+                if (event.target.isMuted && event.target.isMuted()) {
+                    event.target.unMute();
+                    event.target.setVolume(100);
+                }
+            }
+        }
+
+        // Thử phát có tiếng ngay lập tức (gọi bên trong sự kiện click là tốt nhất)
+        function attemptYtPlay() {
+            if (!ytPlayer || typeof ytPlayer.playVideo !== 'function') return;
+            try {
+                ytPlayer.unMute();
+                ytPlayer.setVolume(100);
+                ytPlayer.playVideo();
+            } catch (e) { /* player chưa sẵn sàng, watchdog sẽ thử lại */ }
         }
 
         // Gọi hàm này ngay trong sự kiện click của học sinh (bắt buộc để trình duyệt cho phép phát có tiếng)
         function playLockedAudio() {
             if (!YOUTUBE_VIDEO_ID) return;
             ytShouldBePlaying = true;
-            if (ytPlayer && typeof ytPlayer.playVideo === 'function') {
-                ytPlayer.unMute();
-                ytPlayer.setVolume(100);
-                ytPlayer.playVideo();
+            attemptYtPlay();
+            startYtWatchdog();
+        }
+
+        // --- KHẮC PHỤC TRIỆT ĐỂ: dựng lại hoàn toàn player khi bị kẹt ---
+        // Trình duyệt đôi khi để một phiên phát media rơi vào trạng thái "kẹt" mà
+        // gọi lại playVideo() bao nhiêu lần cũng vô ích (ví dụ: chính sách autoplay
+        // của trình duyệt đã âm thầm chặn hẳn context đó). Cách chắc chắn nhất để
+        // thoát trạng thái này là hủy iframe player cũ và tạo một iframe hoàn toàn
+        // mới - tương đương "tải lại" nhưng chỉ riêng phần audio, học sinh không hề
+        // thấy gì vì player luôn ẩn.
+        function rebuildYtPlayer() {
+            if (ytIsRebuilding || !YOUTUBE_VIDEO_ID) return;
+            ytIsRebuilding = true;
+            ytWatchdogFailCount = 0;
+            ytFallbackMuteTried = false;
+
+            try {
+                if (ytPlayer && typeof ytPlayer.destroy === 'function') {
+                    ytPlayer.destroy();
+                }
+            } catch (e) { /* player đã hỏng sẵn, bỏ qua lỗi hủy */ }
+            ytPlayer = null;
+
+            const container = document.getElementById('yt-audio-container');
+            if (container) {
+                container.innerHTML = '<div id="yt-audio-player"></div>';
+            }
+
+            if (typeof YT !== 'undefined' && YT.Player) {
+                createYtPlayer(); // onYtPlayerReady sẽ tự phát tiếp nếu ytShouldBePlaying = true
+            } else {
+                // Trường hợp hiếm: thư viện YouTube API chưa tải xong - thử lại sau 1.5s
+                ytIsRebuilding = false;
+                setTimeout(() => { if (ytShouldBePlaying) rebuildYtPlayer(); }, 1500);
             }
         }
+
+        // --- WATCHDOG: khắc phục lỗi "thỉnh thoảng không phát, phải tải lại trang" ---
+        // Cứ mỗi giây kiểm tra xem video có đang thực sự phát không; nếu không, tự
+        // thử lại. Nếu vài lần liên tiếp vẫn thất bại, chuyển sang mẹo "phát câm
+        // trước" (trình duyệt luôn cho phép tự phát khi tắt tiếng) rồi tự bật tiếng
+        // lại ngay khi video bắt đầu chạy. Nếu ngay cả cách đó cũng không cứu được
+        // sau nhiều giây, tự động dựng lại hoàn toàn player (xem rebuildYtPlayer).
+        function startYtWatchdog() {
+            if (ytWatchdogInterval) return;
+            ytWatchdogInterval = setInterval(() => {
+                if (!ytShouldBePlaying || ytIsRebuilding) return;
+                if (!ytPlayer || typeof ytPlayer.getPlayerState !== 'function') {
+                    ytWatchdogFailCount++;
+                    if (ytWatchdogFailCount >= 5) rebuildYtPlayer();
+                    return;
+                }
+                try {
+                    const state = ytPlayer.getPlayerState();
+                    const isPlaying = (state === YT.PlayerState.PLAYING || state === YT.PlayerState.BUFFERING);
+
+                    if (!isPlaying) {
+                        ytWatchdogFailCount++;
+                        if (ytWatchdogFailCount >= 10) {
+                            // Đã thử đủ cách trong 10 giây vẫn không được -> dựng lại player từ đầu
+                            rebuildYtPlayer();
+                        } else if (ytWatchdogFailCount >= 3 && !ytFallbackMuteTried) {
+                            // Phát có tiếng nhiều lần thất bại -> phát câm trước để chắc chắn chạy
+                            ytFallbackMuteTried = true;
+                            ytPlayer.mute();
+                            ytPlayer.playVideo();
+                        } else {
+                            ytPlayer.unMute();
+                            ytPlayer.setVolume(100);
+                            ytPlayer.playVideo();
+                        }
+                    } else if (ytPlayer.isMuted && ytPlayer.isMuted()) {
+                        // Đang phát nhưng đang ở chế độ câm (do rơi vào nhánh fallback) -> bật tiếng lại
+                        ytPlayer.unMute();
+                        ytPlayer.setVolume(100);
+                    }
+                } catch (e) {
+                    ytWatchdogFailCount++;
+                    if (ytWatchdogFailCount >= 5) rebuildYtPlayer();
+                }
+            }, 1000);
+        }
+
+        // --- NÚT THỦ CÔNG "BẬT ÂM THANH" TRÊN TOOLBAR ---
+        // Cho giáo viên/học sinh một cách chủ động khắc phục ngay lập tức nếu vì lý
+        // do gì đó audio không tự chạy: bấm nút này vừa là một cú click thật của
+        // người dùng (giúp vượt qua rào cản autoplay của trình duyệt) vừa buộc dựng
+        // lại player nếu sau ~1.2 giây vẫn chưa phát được.
+        document.addEventListener('DOMContentLoaded', () => {
+            const btnAudioRestart = document.getElementById('btn-audio-restart');
+            if (!btnAudioRestart) return;
+            if (!YOUTUBE_VIDEO_ID) return; // không cấu hình audio -> giữ ẩn nút, không ảnh hưởng gì
+
+            btnAudioRestart.style.display = 'inline-block';
+            btnAudioRestart.addEventListener('click', () => {
+                ytShouldBePlaying = true;
+                ytFallbackMuteTried = false;
+                ytWatchdogFailCount = 0;
+                attemptYtPlay();
+                startYtWatchdog();
+
+                setTimeout(() => {
+                    if (!ytShouldBePlaying) return;
+                    let isPlaying = false;
+                    try {
+                        if (ytPlayer && typeof ytPlayer.getPlayerState === 'function') {
+                            const state = ytPlayer.getPlayerState();
+                            isPlaying = (state === YT.PlayerState.PLAYING || state === YT.PlayerState.BUFFERING);
+                        }
+                    } catch (e) { /* coi như chưa phát được */ }
+                    if (!isPlaying) rebuildYtPlayer();
+                }, 1200);
+            });
+        });
         // --- END YOUTUBE AUDIO LOCK CONFIG ---
 
         const transformLayer = document.getElementById('pdf-transform-layer');
