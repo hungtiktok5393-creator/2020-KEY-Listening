@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>2020 ket plus test 2</title>
+    <title>ket plus test 3 listening</title>
     <!-- Load Mozilla's PDF.js library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
     <!-- Load YouTube IFrame API (dùng để phát âm thanh nền, ẩn hoàn toàn khỏi người dùng) -->
@@ -1091,14 +1091,14 @@
         }
 
         // --- TIMER INFRASTRUCTURE ---
+        // Lưu ý: audio KHÔNG tự chạy khi bấm 2 nút này nữa - chỉ chạy khi học sinh
+        // chủ động bấm nút "🔊 Bật Âm Thanh" trên toolbar (xem khối YOUTUBE AUDIO LOCK CONFIG).
         btnSkipTimer.addEventListener('click', () => {
             timerGate.style.display = 'none'; 
-            playLockedAudio(); // Bắt đầu phát âm thanh nền (nếu có cấu hình link YouTube)
         });
 
         btnStartTimer.addEventListener('click', () => {
             timerGate.style.display = 'none';
-            playLockedAudio(); // Bắt đầu phát âm thanh nền (nếu có cấu hình link YouTube)
             startExamCountdown(TEST_DURATION_SECONDS);
         });
 
